@@ -1,26 +1,19 @@
+import argparse
 import csv
-import clipboard
+import os
 import hashlib
-import time
-from pynput import keyboard, mouse
 from datetime import datetime, timedelta
+from pytz import timezone
+from slack_sdk import WebClient
 
-DAYS_AHEAD = 5
-DAYS_OFFSET = 17
-SLEEP_SECONDS = 0.2
-POSITIONS = {
-    "slack_select": (134.65023803710938, 52.684173583984375),
-    "slack_textbox": (416.0513916015625, 1037.39404296875),
-    "schedule1": (1755.966796875, 1072.2340087890625),
-    "schedule2": (1582.39404296875, 1040.10009765625),
-    "date_select": (776.720947265625, 571.3927001953125),
-    "time_select": (1012.1507568359375, 570.7311401367188),
-    "schedule_button": (1049.039794921875, 638.9081420898438),
-}
+
+SLACK_TOKEN = os.environ.get("SLACK_TOKEN")
+CHANNEL_ID = os.environ.get("CHANNEL_ID")
+TIMEZONE = os.environ.get("TIMEZONE")
 
 
 def parse_data():
-    with open('data.csv', newline='') as csvfile:
+    with open("data.csv", newline="") as csvfile:
         data = [x for x in csv.reader(csvfile)]
     holidays = {}
     for h in data[2:]:
@@ -37,7 +30,7 @@ def parse_data():
 def pick_people(peeps_set, holidays, when=None):
     if not when:
         when = datetime.now()
-    a = hashlib.sha256(bytes(when.strftime("%Y-%m-%d"), 'utf-8')).hexdigest()
+    a = hashlib.sha256(bytes(when.strftime("%Y-%m-%d"), "utf-8")).hexdigest()
     res = []
     for b in a:
         intval = int(b, 16)
@@ -51,81 +44,47 @@ def pick_people(peeps_set, holidays, when=None):
     return [peeps_set[a] for a in res if peeps_set[a] not in holidays]
 
 
-def insert_to_slack(names, when):
-    clipboard.copy(", ".join(names))
-    mouse_ctrl = mouse.Controller()
-    keyboard_ctrl = keyboard.Controller()
-    mouse_ctrl.position = POSITIONS["slack_select"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.position = POSITIONS["slack_textbox"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
-    # TODO: Get this OS independent
-    keyboard_ctrl.press(keyboard.Key.cmd.value)
-    keyboard_ctrl.press("v")
-    keyboard_ctrl.release("v")
-    keyboard_ctrl.release(keyboard.Key.cmd.value)
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.position = POSITIONS["schedule1"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.position = POSITIONS["schedule2"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.position = POSITIONS["date_select"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    clipboard.copy(when.strftime("%Y-%m-%d"))
-    keyboard_ctrl.press(keyboard.Key.cmd.value)
-    keyboard_ctrl.press("v")
-    keyboard_ctrl.release("v")
-    keyboard_ctrl.release(keyboard.Key.cmd.value)
-    time.sleep(SLEEP_SECONDS)
-    clipboard.copy(when.strftime("%H:%M"))
-    mouse_ctrl.position = POSITIONS["time_select"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
-    keyboard_ctrl.press(keyboard.Key.cmd.value)
-    keyboard_ctrl.press("v")
-    keyboard_ctrl.release("v")
-    keyboard_ctrl.release(keyboard.Key.cmd.value)
-    time.sleep(SLEEP_SECONDS)
-    keyboard_ctrl.press(keyboard.Key.enter.value)
-    keyboard_ctrl.release(keyboard.Key.enter.value)
-    mouse_ctrl.position = POSITIONS["schedule_button"]
-    time.sleep(SLEEP_SECONDS)
-    mouse_ctrl.press(mouse.Button.left)
-    mouse_ctrl.release(mouse.Button.left)
-    time.sleep(SLEEP_SECONDS)
+def insert_to_slack(names, when, slack_client):
+    msg = "Standup roulette results: " + ", ".join(names)
+    result = slack_client.chat_scheduleMessage(
+        channel=CHANNEL_ID, text=msg, post_at=when.strftime("%s")
+    )
+    print(result)
 
 
-def run():
+def run(offset, days_ahead, dry_run=False):
     names, times, holidays = parse_data()
-    start = datetime.now()
-    for i in range(0 + DAYS_OFFSET, DAYS_AHEAD + DAYS_OFFSET):
+    start = datetime.now(timezone(TIMEZONE))
+    slack_client = WebClient(token=SLACK_TOKEN)
+
+    for i in range(0 + offset, days_ahead + offset):
         when = start + timedelta(days=i)
         day_position = int(when.strftime("%w"))
         if day_position in [0, 6]:
             continue
         when = when.replace(
             hour=int(times[day_position - 1].split(":")[0]),
-            minute=int(times[day_position - 1].split(":")[1])
+            minute=int(times[day_position - 1].split(":")[1]),
+            second=0,
         )
-        standup_names = pick_people(names, holidays.get(when.strftime("%Y-%m-%d"), []), when)
-        insert_to_slack(standup_names, when)
+        standup_names = pick_people(
+            names, holidays.get(when.strftime("%Y-%m-%d"), []), when
+        )
+        if not dry_run:
+            insert_to_slack(standup_names, when, slack_client)
 
 
-if __name__ == '__main__':
-    run()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Slack messages won't get created."
+    )
+    parser.add_argument(
+        "-o", "--offset", default=0, type=int, help="Days ahead when to start"
+    )
+    parser.add_argument(
+        "-a", "--days-ahead", default=30, type=int, help="How many days to schedule"
+    )
+    args = parser.parse_args()
+    run(args.offset, args.days_ahead, dry_run=args.dry_run)
+

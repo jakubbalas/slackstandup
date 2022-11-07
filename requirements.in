@@ -1,3 +1,5 @@
-clipboard
-pynput
+black
 pip-tools
+pytz
+requests
+slack_sdk
