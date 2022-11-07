@@ -52,10 +52,9 @@ def insert_to_slack(names, when, slack_client):
     print(result)
 
 
-def run(offset, days_ahead, dry_run=False):
+def run(cli, offset, days_ahead, dry_run=False):
     names, times, holidays = parse_data()
     start = datetime.now(timezone(TIMEZONE))
-    slack_client = WebClient(token=SLACK_TOKEN)
 
     for i in range(0 + offset, days_ahead + offset):
         when = start + timedelta(days=i)
@@ -71,7 +70,28 @@ def run(offset, days_ahead, dry_run=False):
             names, holidays.get(when.strftime("%Y-%m-%d"), []), when
         )
         if not dry_run:
-            insert_to_slack(standup_names, when, slack_client)
+            insert_to_slack(standup_names, when, cli)
+
+
+def list_scheduled(client):
+    start = datetime.now()
+    result = client.chat_scheduledMessages_list(
+        channel_id=CHANNEL_ID,
+        latest=(start + timedelta(days=60)).strftime("%s"),
+        oldest=start.strftime("%s"),
+    )
+
+    return result
+
+
+def clear_schedule(client):
+    """Handy if you messed up and need to reschedule messages again"""
+    ids = [i["id"] for i in list_scheduled(client)["scheduled_messages"]]
+    for i in ids:
+        r = client.chat_deleteScheduledMessage(
+            channel=CHANNEL_ID, scheduled_message_id=i
+        )
+        print(r)
 
 
 if __name__ == "__main__":
@@ -85,6 +105,23 @@ if __name__ == "__main__":
     parser.add_argument(
         "-a", "--days-ahead", default=30, type=int, help="How many days to schedule"
     )
-    args = parser.parse_args()
-    run(args.offset, args.days_ahead, dry_run=args.dry_run)
+    parser.add_argument(
+        "--show-scheduled",
+        action="store_true",
+        help="Show all scheduled messages and exit.",
+    )
 
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Remove all scheduled messages and schedule again.",
+    )
+
+    args = parser.parse_args()
+    slack_cli = WebClient(token=SLACK_TOKEN)
+    if args.show_scheduled:
+        print(list_scheduled(slack_cli))
+        exit()
+    if args.refresh:
+        clear_schedule(slack_cli)
+    run(slack_cli, args.offset, args.days_ahead, dry_run=args.dry_run)
