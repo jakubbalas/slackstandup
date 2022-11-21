@@ -117,10 +117,19 @@ if __name__ == "__main__":
         help="Remove all scheduled messages and schedule again.",
     )
 
+    parser.add_argument(
+        "--clear",
+        action="store_true",
+        help="Remove all scheduled messages.",
+    )
+
     args = parser.parse_args()
     slack_cli = WebClient(token=SLACK_TOKEN)
     if args.show_scheduled:
         print(list_scheduled(slack_cli))
+        exit()
+    if args.clear:
+        clear_schedule(slack_cli)
         exit()
     if args.refresh:
         clear_schedule(slack_cli)
